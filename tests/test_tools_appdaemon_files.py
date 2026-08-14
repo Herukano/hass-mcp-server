@@ -1,6 +1,7 @@
 """Security and lifecycle tests for bounded AppDaemon file access."""
 
 import json
+from hashlib import sha256
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -36,34 +37,45 @@ def apps_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.mark.asyncio
 async def test_read_nested_file_and_sha(apps_root: Path):
     file = apps_root / "predictors" / "solar.py"
-    file.parent.mkdir(); file.write_text("class Solar: pass\n")
+    file.parent.mkdir()
+    file.write_text("class Solar: pass\n")
     result = _payload(await tools.get_appdaemon_file(_hass(), {"path": "predictors/solar.py"}))
     assert result["path"] == "predictors/solar.py"
     assert result["content"] == "class Solar: pass\n"
-    assert len(result["sha256"]) == 64
+    assert result["sha256"] == sha256(b"class Solar: pass\n").hexdigest()
 
 
 @pytest.mark.asyncio
 async def test_save_is_atomic_preserves_mode_and_creates_backup(apps_root: Path):
-    file = apps_root / "solar.py"; file.write_text("old\n"); file.chmod(0o600)
-    result = _payload(await tools.save_appdaemon_file(_hass(), {"path": "solar.py", "content": "new\n"}))
-    assert result["success"] and result["sha256_before"] != result["sha256_after"]
+    file = apps_root / "solar.py"
+    file.write_text("old\n")
+    file.chmod(0o600)
+    result = _payload(
+        await tools.save_appdaemon_file(_hass(), {"path": "solar.py", "content": "new\n"})
+    )
+    assert result["success"]
+    assert result["sha256_before"] == sha256(b"old\n").hexdigest()
+    assert result["sha256_after"] == sha256(b"new\n").hexdigest()
     assert file.read_text() == "new\n" and (file.stat().st_mode & 0o777) == 0o600
     assert (apps_root / result["backup"] / "solar.py").read_text() == "old\n"
 
 
 @pytest.mark.asyncio
 async def test_delete_creates_backup_and_reports_hash(apps_root: Path):
-    file = apps_root / "solar.py"; file.write_text("delete me\n")
+    file = apps_root / "solar.py"
+    file.write_text("delete me\n")
     result = _payload(await tools.delete_appdaemon_file(_hass(), {"path": "solar.py"}))
-    assert result["success"] and result["sha256_before"] and result["sha256_after"] is None
+    assert result["success"]
+    assert result["sha256_before"] == sha256(b"delete me\n").hexdigest()
+    assert result["sha256_after"] is None
     assert not file.exists()
     assert (apps_root / result["backup"] / "solar.py").read_text() == "delete me\n"
 
 
 @pytest.mark.asyncio
 async def test_restore_creates_pre_restore_backup(apps_root: Path):
-    file = apps_root / "solar.py"; file.write_text("original\n")
+    file = apps_root / "solar.py"
+    file.write_text("original\n")
     backup = _payload(await tools.backup_appdaemon_files(_hass(), {}))["backup"].split("/")[-1]
     file.write_text("changed\n")
     result = _payload(await tools.restore_appdaemon_backup(_hass(), {"timestamp": backup}))
@@ -72,7 +84,14 @@ async def test_restore_creates_pre_restore_backup(apps_root: Path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path", ["../config/configuration.yaml", "/config/configuration.yaml", "/addon_configs/other/apps/x.py"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "../config/configuration.yaml",
+        "/config/configuration.yaml",
+        "/addon_configs/other/apps/x.py",
+    ],
+)
 async def test_rejects_traversal_and_absolute_escapes(apps_root: Path, path: str):
     text = (await tools.get_appdaemon_file(_hass(), {"path": path}))["content"][0]["text"]
     assert "Error reading AppDaemon file" in text
@@ -81,9 +100,16 @@ async def test_rejects_traversal_and_absolute_escapes(apps_root: Path, path: str
 
 @pytest.mark.asyncio
 async def test_rejects_symlink_escape_and_cannot_touch_config(apps_root: Path, tmp_path: Path):
-    outside = tmp_path / "config"; outside.mkdir(); victim = outside / "configuration.yaml"; victim.write_text("safe\n")
+    outside = tmp_path / "config"
+    outside.mkdir()
+    victim = outside / "configuration.yaml"
+    victim.write_text("safe\n")
     (apps_root / "escape").symlink_to(outside, target_is_directory=True)
-    text = (await tools.save_appdaemon_file(_hass(), {"path": "escape/configuration.yaml", "content": "bad\n"}))["content"][0]["text"]
+    text = (
+        await tools.save_appdaemon_file(
+            _hass(), {"path": "escape/configuration.yaml", "content": "bad\n"}
+        )
+    )["content"][0]["text"]
     assert "Error saving AppDaemon file" in text and victim.read_text() == "safe\n"
 
 

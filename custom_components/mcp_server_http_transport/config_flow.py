@@ -92,7 +92,9 @@ class MCPServerOptionsFlowHandler(config_entries.OptionsFlow):
         current_config_file_access = self.config_entry.data.get(CONF_CONFIG_FILE_ACCESS, False)
         current_camera_image_access = self.config_entry.data.get(CONF_CAMERA_IMAGE_ACCESS, False)
         current_image_file_access = self.config_entry.data.get(CONF_IMAGE_FILE_ACCESS, False)
-        current_appdaemon_file_access = self.config_entry.data.get(CONF_APPDAEMON_FILE_ACCESS, False)
+        current_appdaemon_file_access = self.config_entry.data.get(
+            CONF_APPDAEMON_FILE_ACCESS, False
+        )
 
         return self.async_show_form(
             step_id="init",
@@ -104,7 +106,9 @@ class MCPServerOptionsFlowHandler(config_entries.OptionsFlow):
                         CONF_CAMERA_IMAGE_ACCESS, default=current_camera_image_access
                     ): bool,
                     vol.Optional(CONF_IMAGE_FILE_ACCESS, default=current_image_file_access): bool,
-                    vol.Optional(CONF_APPDAEMON_FILE_ACCESS, default=current_appdaemon_file_access): bool,
+                    vol.Optional(
+                        CONF_APPDAEMON_FILE_ACCESS, default=current_appdaemon_file_access
+                    ): bool,
                 }
             ),
             errors=errors,
