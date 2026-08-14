@@ -74,6 +74,14 @@ def _parts(value: str, *, allow_backup: bool = False) -> tuple[str, ...]:
     return parts
 
 
+class _WriteFailure(OSError):
+    """A write failure that says whether replacement may already have happened."""
+
+    def __init__(self, cause: Exception, *, possibly_committed: bool) -> None:
+        super().__init__(str(cause))
+        self.possibly_committed = possibly_committed
+
+
 class _RootFS:
     """Filesystem operations rooted at an O_NOFOLLOW directory descriptor.
 
@@ -152,6 +160,8 @@ class _RootFS:
     def write(self, parts: tuple[str, ...], content: bytes, mode: int) -> None:
         parent, name = self._parent(parts)
         temp = f".{name}.mcp_tmp_{uuid.uuid4().hex}"
+        committed = False
+        replace_started = False
         try:
             fd = os.open(
                 temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=parent
@@ -165,15 +175,21 @@ class _RootFS:
             finally:
                 os.close(fd)
             # rename replaces the directory entry, never the target of a symlink.
+            replace_started = True
             os.replace(temp, name, src_dir_fd=parent, dst_dir_fd=parent)
-        except Exception:
+            committed = True
+        except Exception as exc:
             try:
                 os.unlink(temp, dir_fd=parent)
             except FileNotFoundError:
                 pass
-            raise
+            raise _WriteFailure(exc, possibly_committed=committed or replace_started) from exc
         finally:
-            os.close(parent)
+            try:
+                os.close(parent)
+            except Exception as exc:
+                # Closing after replacement cannot undo the replacement.
+                raise _WriteFailure(exc, possibly_committed=committed) from exc
 
     def unlink(self, parts: tuple[str, ...]) -> None:
         # Read through O_NOFOLLOW first, then unlink only the in-root entry.
@@ -270,17 +286,23 @@ def _restore(fs: _RootFS, timestamp: str) -> dict[str, Any]:
         os.close(parent)
     pre, _ = fs.snapshot()
     attempted: list[tuple[str, ...]] = []
+    possibly_committed: list[tuple[str, ...]] = []
     try:
         for rel, data, mode in planned:
-            # ``write`` can have atomically replaced the entry before a later
-            # fsync/cleanup error is observed.  Track it first so a failure is
-            # always contained as committed-or-possibly-committed.
             attempted.append(rel)
-            fs.write(rel, data, mode)
+            try:
+                fs.write(rel, data, mode)
+            except _WriteFailure as exc:
+                if exc.possibly_committed:
+                    possibly_committed.append(rel)
+                raise
+            else:
+                # A normal return means os.replace completed.
+                possibly_committed.append(rel)
     except Exception as mutation_error:
         rollback_errors: list[str] = []
         rolled_back: list[str] = []
-        for rel in reversed(attempted):
+        for rel in reversed(possibly_committed):
             try:
                 old = previous[rel]
                 if old is None:
@@ -301,7 +323,7 @@ def _restore(fs: _RootFS, timestamp: str) -> dict[str, Any]:
             "rollback_attempted": True,
             "rollback_result": "failed" if rollback_errors else "succeeded",
             "attempted_paths": ["/".join(item) for item in attempted],
-            "affected_paths": ["/".join(item) for item in attempted],
+            "possibly_committed_paths": ["/".join(item) for item in possibly_committed],
             "rolled_back_paths": rolled_back,
             "rollback_failed_paths": [item.split(":", 1)[0] for item in rollback_errors],
             "rollback_errors": rollback_errors,
@@ -314,7 +336,7 @@ def _restore(fs: _RootFS, timestamp: str) -> dict[str, Any]:
         "rollback_attempted": False,
         "rollback_result": "not_required",
         "attempted_paths": ["/".join(item) for item in attempted],
-        "affected_paths": ["/".join(item) for item in attempted],
+        "possibly_committed_paths": ["/".join(item) for item in possibly_committed],
         "rolled_back_paths": [],
         "rollback_failed_paths": [],
         "restored": ["/".join(item) for item in attempted],

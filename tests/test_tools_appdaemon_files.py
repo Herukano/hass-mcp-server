@@ -275,6 +275,10 @@ async def test_restore_failure_rolls_back_modified_targets(apps_root: Path, monk
     result = _payload(await tools.restore_appdaemon_backup(_hass(), {"timestamp": stamp}))
     assert not result["success"] and result["rollback_attempted"]
     assert result["rollback_result"] == "succeeded"
+    assert result["attempted_paths"] == ["one.py", "two.py"]
+    assert result["possibly_committed_paths"] == ["one.py"]
+    assert result["rolled_back_paths"] == ["one.py"]
+    assert result["rollback_failed_paths"] == []
     assert one.read_text() == "changed one\n" and two.read_text() == "changed two\n"
 
 
@@ -331,7 +335,7 @@ async def test_restore_post_replace_failure_rolls_back_possibly_committed_target
     result = _payload(await tools.restore_appdaemon_backup(_hass(), {"timestamp": stamp}))
     assert not result["success"]
     assert result["attempted_paths"] == ["one.py", "two.py"]
-    assert result["affected_paths"] == ["one.py", "two.py"]
+    assert result["possibly_committed_paths"] == ["one.py", "two.py"]
     assert result["rolled_back_paths"] == ["two.py", "one.py"]
     assert result["rollback_failed_paths"] == []
     assert one.read_text() == "current one\n" and two.read_text() == "current two\n"
@@ -392,7 +396,8 @@ async def test_restore_destination_component_swap_fails_without_external_write(
     monkeypatch.setattr(tools._RootFS, "write", swap_before_destination_write)
     result = _payload(await tools.restore_appdaemon_backup(_hass(), {"timestamp": stamp}))
     assert not result["success"]
-    assert result["rollback_result"] == "failed"
+    assert result["possibly_committed_paths"] == []
+    assert result["rollback_result"] == "succeeded"
     assert victim.read_text() == "external\n"
 
 
