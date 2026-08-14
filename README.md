@@ -176,7 +176,7 @@ For local agents or MCP clients that can't run an OAuth browser flow, you can au
 | `delete_appdaemon_file` | Delete one app file after a rollback snapshot; reports SHA256 |
 | `backup_appdaemon_files` | Snapshot all regular app files into a controlled timestamped directory |
 | `list_appdaemon_backups` | List available controlled snapshots |
-| `restore_appdaemon_backup` | Restore a named snapshot after taking a pre-restore snapshot |
+| `restore_appdaemon_backup` | Restore a named snapshot after taking a pre-restore snapshot; reports contained rollback status on mutation failure |
 
 **Dashboards**
 
@@ -534,7 +534,7 @@ This separate, disabled-by-default capability is for deploying reviewed AppDaemo
 /addon_configs/a0d7b954_appdaemon/apps/
 ```
 
-Absolute paths, `..` traversal, and any symlink component are rejected. The controlled `.mcp_appdaemon_backups/<timestamp>/` directory is excluded from normal file tools; it is available only through the backup tools. Saves use a same-directory temporary file and atomic replacement where the filesystem supports it, preserving an existing file's mode (new files use `0640`). Each save/delete creates a full app-tree snapshot before mutation and returns the affected relative path plus SHA256 values. Restore overwrites files present in the chosen snapshot, leaves later-added files untouched, and first creates a pre-restore snapshot.
+Absolute paths, `..` traversal, malformed components, and any symlink component are rejected. Operations are anchored to a no-follow directory descriptor for this root, including intermediate directories and backup paths, so a path swap cannot redirect access outside it. The controlled `.mcp_appdaemon_backups/<timestamp>/` directory is excluded from normal file tools; it is available only through the backup tools. Saves use a same-directory temporary file and atomic replacement where the filesystem supports it, preserving an existing file's mode (new files use `0640`). Each save/delete creates a full app-tree snapshot before mutation and returns the affected relative path plus SHA256 values. Restore validates sources and targets before mutation, first creates a pre-restore snapshot, and automatically rolls back already changed files if a later restore write fails; its response explicitly reports mutation and rollback status. Restore overwrites files present in the chosen snapshot and leaves later-added files untouched.
 
 Suggested workflow: inspect with `list_appdaemon_files` / `get_appdaemon_file`; create an explicit snapshot; save the reviewed app and `apps.yaml`; inspect returned hashes; then restart the existing controlled add-on service using `hassio.addon_restart` with `addon: a0d7b954_appdaemon`. This capability deliberately does not add a restart, process, or shell tool. Verify the add-on through existing Home Assistant state/log facilities after the restart.
 
