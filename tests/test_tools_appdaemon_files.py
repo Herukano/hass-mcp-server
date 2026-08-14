@@ -279,6 +279,29 @@ async def test_restore_failure_rolls_back_modified_targets(apps_root: Path, monk
 
 
 @pytest.mark.asyncio
+async def test_restore_failure_removes_file_that_was_previously_absent(
+    apps_root: Path, monkeypatch
+):
+    one, two = apps_root / "one.py", apps_root / "two.py"
+    one.write_text("snapshot one\n")
+    two.write_text("snapshot two\n")
+    stamp = _payload(await tools.backup_appdaemon_files(_hass(), {}))["backup"].split("/")[-1]
+    one.unlink()
+    two.write_text("current two\n")
+    original_write = tools._RootFS.write
+
+    def fail_second(self, parts, content, mode):
+        if parts == ("two.py",):
+            raise OSError("injected mutation failure")
+        return original_write(self, parts, content, mode)
+
+    monkeypatch.setattr(tools._RootFS, "write", fail_second)
+    result = _payload(await tools.restore_appdaemon_backup(_hass(), {"timestamp": stamp}))
+    assert not result["success"] and result["rollback_result"] == "succeeded"
+    assert not one.exists() and two.read_text() == "current two\n"
+
+
+@pytest.mark.asyncio
 async def test_restore_reports_rollback_failure(apps_root: Path, monkeypatch):
     one, two = apps_root / "one.py", apps_root / "two.py"
     one.write_text("old one\n")
