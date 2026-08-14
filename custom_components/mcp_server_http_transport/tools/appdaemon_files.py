@@ -269,14 +269,18 @@ def _restore(fs: _RootFS, timestamp: str) -> dict[str, Any]:
         parent = fs.dir(rel[:-1])
         os.close(parent)
     pre, _ = fs.snapshot()
-    changed: list[tuple[str, ...]] = []
+    attempted: list[tuple[str, ...]] = []
     try:
         for rel, data, mode in planned:
+            # ``write`` can have atomically replaced the entry before a later
+            # fsync/cleanup error is observed.  Track it first so a failure is
+            # always contained as committed-or-possibly-committed.
+            attempted.append(rel)
             fs.write(rel, data, mode)
-            changed.append(rel)
     except Exception as mutation_error:
         rollback_errors: list[str] = []
-        for rel in reversed(changed):
+        rolled_back: list[str] = []
+        for rel in reversed(attempted):
             try:
                 old = previous[rel]
                 if old is None:
@@ -286,6 +290,7 @@ def _restore(fs: _RootFS, timestamp: str) -> dict[str, Any]:
                         pass
                 else:
                     fs.write(rel, old[0], old[1])
+                rolled_back.append("/".join(rel))
             except Exception as rollback_error:  # explicit, never concealed
                 rollback_errors.append(f"{'/'.join(rel)}: {rollback_error}")
         return {
@@ -295,7 +300,10 @@ def _restore(fs: _RootFS, timestamp: str) -> dict[str, Any]:
             "mutation_result": f"failed: {mutation_error}",
             "rollback_attempted": True,
             "rollback_result": "failed" if rollback_errors else "succeeded",
-            "affected_paths": ["/".join(item) for item in changed],
+            "attempted_paths": ["/".join(item) for item in attempted],
+            "affected_paths": ["/".join(item) for item in attempted],
+            "rolled_back_paths": rolled_back,
+            "rollback_failed_paths": [item.split(":", 1)[0] for item in rollback_errors],
             "rollback_errors": rollback_errors,
         }
     return {
@@ -305,8 +313,11 @@ def _restore(fs: _RootFS, timestamp: str) -> dict[str, Any]:
         "mutation_result": "succeeded",
         "rollback_attempted": False,
         "rollback_result": "not_required",
-        "affected_paths": ["/".join(item) for item in changed],
-        "restored": ["/".join(item) for item in changed],
+        "attempted_paths": ["/".join(item) for item in attempted],
+        "affected_paths": ["/".join(item) for item in attempted],
+        "rolled_back_paths": [],
+        "rollback_failed_paths": [],
+        "restored": ["/".join(item) for item in attempted],
     }
 
 

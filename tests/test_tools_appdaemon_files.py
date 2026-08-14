@@ -289,9 +289,12 @@ async def test_restore_failure_removes_file_that_was_previously_absent(
     one.unlink()
     two.write_text("current two\n")
     original_write = tools._RootFS.write
+    failed = False
 
     def fail_second(self, parts, content, mode):
-        if parts == ("two.py",):
+        nonlocal failed
+        if parts == ("two.py",) and not failed:
+            failed = True
             raise OSError("injected mutation failure")
         return original_write(self, parts, content, mode)
 
@@ -299,6 +302,98 @@ async def test_restore_failure_removes_file_that_was_previously_absent(
     result = _payload(await tools.restore_appdaemon_backup(_hass(), {"timestamp": stamp}))
     assert not result["success"] and result["rollback_result"] == "succeeded"
     assert not one.exists() and two.read_text() == "current two\n"
+
+
+@pytest.mark.asyncio
+async def test_restore_post_replace_failure_rolls_back_possibly_committed_target(
+    apps_root: Path, monkeypatch
+):
+    one, two = apps_root / "one.py", apps_root / "two.py"
+    one.write_text("snapshot one\n")
+    two.write_text("snapshot two\n")
+    stamp = _payload(await tools.backup_appdaemon_files(_hass(), {}))["backup"].split("/")[-1]
+    one.write_text("current one\n")
+    two.write_text("current two\n")
+    original_replace, replacement_count, failed = tools.os.replace, 0, False
+
+    def replace_then_fail(source, destination, *args, **kwargs):
+        nonlocal failed, replacement_count
+        original_replace(source, destination, *args, **kwargs)
+        if destination == "two.py":
+            replacement_count += 1
+        # The first matching replacement belongs to the pre-restore snapshot;
+        # the second is the actual target mutation.
+        if destination == "two.py" and replacement_count == 2 and not failed:
+            failed = True
+            raise OSError("injected post-replace failure")
+
+    monkeypatch.setattr(tools.os, "replace", replace_then_fail)
+    result = _payload(await tools.restore_appdaemon_backup(_hass(), {"timestamp": stamp}))
+    assert not result["success"]
+    assert result["attempted_paths"] == ["one.py", "two.py"]
+    assert result["affected_paths"] == ["one.py", "two.py"]
+    assert result["rolled_back_paths"] == ["two.py", "one.py"]
+    assert result["rollback_failed_paths"] == []
+    assert one.read_text() == "current one\n" and two.read_text() == "current two\n"
+
+
+@pytest.mark.asyncio
+async def test_list_component_swap_to_symlink_does_not_read_external_file(
+    apps_root: Path, tmp_path: Path, monkeypatch
+):
+    nested = apps_root / "nested"
+    nested.mkdir()
+    (nested / "inside.py").write_text("inside\n")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "victim.py"
+    victim.write_text("external\n")
+    original_open, swapped = tools.os.open, False
+
+    def swap_directory(name, flags, *args, **kwargs):
+        nonlocal swapped
+        if name == "nested" and flags & tools.os.O_DIRECTORY and not swapped:
+            swapped = True
+            (nested / "inside.py").unlink()
+            nested.rmdir()
+            nested.symlink_to(outside, target_is_directory=True)
+        return original_open(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr(tools.os, "open", swap_directory)
+    result = _payload(await tools.list_appdaemon_files(_hass(), {}))
+    assert result == [] and victim.read_text() == "external\n"
+
+
+@pytest.mark.asyncio
+async def test_restore_destination_component_swap_fails_without_external_write(
+    apps_root: Path, tmp_path: Path, monkeypatch
+):
+    nested = apps_root / "nested"
+    nested.mkdir()
+    target = nested / "app.py"
+    target.write_text("snapshot\n")
+    stamp = _payload(await tools.backup_appdaemon_files(_hass(), {}))["backup"].split("/")[-1]
+    target.write_text("current\n")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "app.py"
+    victim.write_text("external\n")
+    original_write, swapped = tools._RootFS.write, False
+
+    def swap_before_destination_write(self, parts, content, mode):
+        nonlocal swapped
+        if parts == ("nested", "app.py") and not swapped:
+            swapped = True
+            target.unlink()
+            nested.rmdir()
+            nested.symlink_to(outside, target_is_directory=True)
+        return original_write(self, parts, content, mode)
+
+    monkeypatch.setattr(tools._RootFS, "write", swap_before_destination_write)
+    result = _payload(await tools.restore_appdaemon_backup(_hass(), {"timestamp": stamp}))
+    assert not result["success"]
+    assert result["rollback_result"] == "failed"
+    assert victim.read_text() == "external\n"
 
 
 @pytest.mark.asyncio
