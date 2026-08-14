@@ -16,6 +16,7 @@ A Home Assistant Custom Component that provides an MCP (Model Context Protocol) 
 - 📋 Lovelace dashboard management (list, get/save/delete config, create/update/delete dashboards) with outline reads and JSON Patch edits so a single card can be changed without resending the whole dashboard
 - 🩺 System administration tools (error log, config validation, restart, system status)
 - 📁 YAML config file management — read, write, delete files with automatic backup before every change and built-in config validation (opt-in)
+- 🔒 AppDaemon app-file management constrained to one fixed add-on apps directory (opt-in; no shell access)
 - 📷 Camera & image access — capture live camera frames and read saved image files for visual analysis (opt-in)
 - 📊 Resources, prompts, and completions for richer AI interactions
 - 🧹 Optimization prompts for auditing automations, naming conventions, and scheduling
@@ -164,6 +165,18 @@ For local agents or MCP clients that can't run an OAuth browser flow, you can au
 | `list_config_backups` | List all available backup snapshots, newest first |
 | `restore_config_backup` | Restore files from the latest or a specific backup; creates a pre-restore snapshot of the current state and runs config validation after restoring |
 | `cleanup_config_backups` | Delete backup snapshots older than N days (default 30); keeps the folder from growing indefinitely |
+
+**AppDaemon Files (opt-in, fixed boundary)**
+
+| Tool | Description |
+|------|-------------|
+| `list_appdaemon_files` | List regular application files under the fixed AppDaemon apps root, with SHA256 |
+| `get_appdaemon_file` | Read one relative app file with SHA256 (max 1 MB) |
+| `save_appdaemon_file` | Atomically save one app file after a rollback snapshot; reports before/after SHA256 |
+| `delete_appdaemon_file` | Delete one app file after a rollback snapshot; reports SHA256 |
+| `backup_appdaemon_files` | Snapshot all regular app files into a controlled timestamped directory |
+| `list_appdaemon_backups` | List available controlled snapshots |
+| `restore_appdaemon_backup` | Restore a named snapshot after taking a pre-restore snapshot |
 
 **Dashboards**
 
@@ -510,6 +523,22 @@ cleanup_config_backups(older_than_days=7)   // delete backups older than 7 days
 ```
 
 You can also delete entries from `config/mcp_backups/` manually via SSH, the Samba share, or the File Editor add-on.
+</details>
+
+<details>
+<summary>How does bounded AppDaemon app-file access work?</summary>
+
+This separate, disabled-by-default capability is for deploying reviewed AppDaemon applications. It exposes no general filesystem or shell tool. Every path is relative to exactly:
+
+```
+/addon_configs/a0d7b954_appdaemon/apps/
+```
+
+Absolute paths, `..` traversal, and any symlink component are rejected. The controlled `.mcp_appdaemon_backups/<timestamp>/` directory is excluded from normal file tools; it is available only through the backup tools. Saves use a same-directory temporary file and atomic replacement where the filesystem supports it, preserving an existing file's mode (new files use `0640`). Each save/delete creates a full app-tree snapshot before mutation and returns the affected relative path plus SHA256 values. Restore overwrites files present in the chosen snapshot, leaves later-added files untouched, and first creates a pre-restore snapshot.
+
+Suggested workflow: inspect with `list_appdaemon_files` / `get_appdaemon_file`; create an explicit snapshot; save the reviewed app and `apps.yaml`; inspect returned hashes; then restart the existing controlled add-on service using `hassio.addon_restart` with `addon: a0d7b954_appdaemon`. This capability deliberately does not add a restart, process, or shell tool. Verify the add-on through existing Home Assistant state/log facilities after the restart.
+
+AppDaemon files can contain tokens or credentials. Put those values in the add-on's supported secrets mechanism before enabling this feature, because readable app files are intentionally available to the authorised MCP client.
 </details>
 
 <details>
