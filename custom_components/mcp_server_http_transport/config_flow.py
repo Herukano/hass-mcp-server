@@ -28,9 +28,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Optional(CONF_CAMERA_IMAGE_ACCESS, default=False): bool,
         vol.Optional(CONF_IMAGE_FILE_ACCESS, default=False): bool,
         vol.Optional(CONF_APPDAEMON_FILE_ACCESS, default=False): bool,
-        vol.Optional(CONF_APPDAEMON_APPS_ROOT, default=DEFAULT_APPDAEMON_APPS_ROOT): vol.All(
-            str, validate_appdaemon_apps_root
-        ),
+        vol.Optional(CONF_APPDAEMON_APPS_ROOT, default=DEFAULT_APPDAEMON_APPS_ROOT): str,
     }
 )
 
@@ -99,18 +97,6 @@ class MCPServerOptionsFlowHandler(config_entries.OptionsFlow):
         """Manage the options."""
         errors: dict[str, str] = {}
 
-        if user_input is not None:
-            native_auth = user_input.get(CONF_NATIVE_AUTH, False)
-
-            if not native_auth and "oidc_provider" not in self.hass.config_entries.async_domains():
-                errors["base"] = "oidc_provider_required"
-            else:
-                self.hass.config_entries.async_update_entry(
-                    self.config_entry,
-                    data={**self.config_entry.data, **user_input},
-                )
-                return self.async_create_entry(title="", data={})
-
         current_native_auth = self.config_entry.data.get(CONF_NATIVE_AUTH, False)
         current_config_file_access = self.config_entry.data.get(CONF_CONFIG_FILE_ACCESS, False)
         current_camera_image_access = self.config_entry.data.get(CONF_CAMERA_IMAGE_ACCESS, False)
@@ -120,6 +106,48 @@ class MCPServerOptionsFlowHandler(config_entries.OptionsFlow):
         )
         current_appdaemon_apps_root = self.config_entry.data.get(
             CONF_APPDAEMON_APPS_ROOT, DEFAULT_APPDAEMON_APPS_ROOT
+        )
+
+        if user_input is not None:
+            submitted_appdaemon_apps_root = user_input.get(
+                CONF_APPDAEMON_APPS_ROOT, current_appdaemon_apps_root
+            )
+            try:
+                validate_appdaemon_apps_root(submitted_appdaemon_apps_root)
+            except ValueError:
+                errors["base"] = "invalid_appdaemon_apps_root"
+
+            native_auth = user_input.get(CONF_NATIVE_AUTH, False)
+
+            if (
+                not errors
+                and not native_auth
+                and "oidc_provider" not in self.hass.config_entries.async_domains()
+            ):
+                errors["base"] = "oidc_provider_required"
+            elif not errors:
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry,
+                    data={
+                        **self.config_entry.data,
+                        **user_input,
+                        CONF_APPDAEMON_APPS_ROOT: submitted_appdaemon_apps_root,
+                    },
+                )
+                return self.async_create_entry(title="", data={})
+
+        values = user_input or {}
+        current_native_auth = values.get(CONF_NATIVE_AUTH, current_native_auth)
+        current_config_file_access = values.get(CONF_CONFIG_FILE_ACCESS, current_config_file_access)
+        current_camera_image_access = values.get(
+            CONF_CAMERA_IMAGE_ACCESS, current_camera_image_access
+        )
+        current_image_file_access = values.get(CONF_IMAGE_FILE_ACCESS, current_image_file_access)
+        current_appdaemon_file_access = values.get(
+            CONF_APPDAEMON_FILE_ACCESS, current_appdaemon_file_access
+        )
+        current_appdaemon_apps_root = values.get(
+            CONF_APPDAEMON_APPS_ROOT, current_appdaemon_apps_root
         )
 
         return self.async_show_form(
@@ -137,7 +165,7 @@ class MCPServerOptionsFlowHandler(config_entries.OptionsFlow):
                     ): bool,
                     vol.Optional(
                         CONF_APPDAEMON_APPS_ROOT, default=current_appdaemon_apps_root
-                    ): vol.All(str, validate_appdaemon_apps_root),
+                    ): str,
                 }
             ),
             errors=errors,
