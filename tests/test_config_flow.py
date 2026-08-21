@@ -9,9 +9,11 @@ from custom_components.mcp_server_http_transport.config_flow import (
     MCPServerOptionsFlowHandler,
 )
 from custom_components.mcp_server_http_transport.const import (
+    CONF_APPDAEMON_APPS_ROOT,
     CONF_CAMERA_IMAGE_ACCESS,
     CONF_IMAGE_FILE_ACCESS,
     CONF_NATIVE_AUTH,
+    DEFAULT_APPDAEMON_APPS_ROOT,
 )
 
 
@@ -46,6 +48,40 @@ class TestMCPServerConfigFlow:
 
         assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
         assert result["data"][CONF_NATIVE_AUTH] is True
+
+    async def test_user_flow_defaults_appdaemon_root(self):
+        """The legacy AppDaemon root remains the default for compatibility."""
+        mock_hass = Mock()
+        mock_hass.config_entries = Mock()
+        mock_hass.config_entries.async_domains = Mock(return_value=[])
+
+        flow = MCPServerConfigFlow()
+        flow.hass = mock_hass
+
+        result = await flow.async_step_user(
+            user_input={
+                CONF_NATIVE_AUTH: True,
+                CONF_APPDAEMON_APPS_ROOT: DEFAULT_APPDAEMON_APPS_ROOT,
+            }
+        )
+
+        assert result["data"][CONF_APPDAEMON_APPS_ROOT] == DEFAULT_APPDAEMON_APPS_ROOT
+
+    async def test_user_flow_rejects_unapproved_appdaemon_root(self):
+        """Roots outside the approved shared locations are rejected."""
+        mock_hass = Mock()
+        mock_hass.config_entries = Mock()
+        mock_hass.config_entries.async_domains = Mock(return_value=[])
+
+        flow = MCPServerConfigFlow()
+        flow.hass = mock_hass
+
+        result = await flow.async_step_user(
+            user_input={CONF_NATIVE_AUTH: True, CONF_APPDAEMON_APPS_ROOT: "/config/apps"}
+        )
+
+        assert result["type"] == data_entry_flow.FlowResultType.FORM
+        assert result["errors"]["base"] == "invalid_appdaemon_apps_root"
 
     async def test_user_flow_error_when_no_oidc_and_native_disabled(self):
         """Test user flow shows error when OIDC missing and native auth disabled."""
@@ -188,6 +224,29 @@ class TestMCPServerOptionsFlow:
         schema_keys = {str(k): k for k in result["data_schema"].schema}
         assert schema_keys[CONF_CAMERA_IMAGE_ACCESS].default() is True
         assert schema_keys[CONF_IMAGE_FILE_ACCESS].default() is True
+
+    async def test_init_step_defaults_appdaemon_root(self):
+        """Existing entries without the new option retain the legacy root."""
+        flow = self._create_flow(data={})
+        result = await flow.async_step_init(user_input=None)
+
+        schema_keys = {str(k): k for k in result["data_schema"].schema}
+        assert schema_keys[CONF_APPDAEMON_APPS_ROOT].default() == DEFAULT_APPDAEMON_APPS_ROOT
+
+    async def test_init_step_persists_appdaemon_root(self):
+        """The selected shared root is persisted with the existing options."""
+        flow = self._create_flow(data={CONF_NATIVE_AUTH: True})
+
+        result = await flow.async_step_init(
+            user_input={
+                CONF_NATIVE_AUTH: True,
+                CONF_APPDAEMON_APPS_ROOT: "/share/appdaemon/apps",
+            }
+        )
+
+        assert result["type"] == data_entry_flow.FlowResultType.CREATE_ENTRY
+        call_kwargs = flow.hass.config_entries.async_update_entry.call_args
+        assert call_kwargs[1]["data"][CONF_APPDAEMON_APPS_ROOT] == "/share/appdaemon/apps"
 
     async def test_init_step_persists_image_access(self):
         """Test init step merges camera and image file access into entry data."""

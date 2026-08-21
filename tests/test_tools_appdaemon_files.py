@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from custom_components.mcp_server_http_transport.const import DOMAIN
+from custom_components.mcp_server_http_transport.const import (
+    CONF_APPDAEMON_APPS_ROOT,
+    DEFAULT_APPDAEMON_APPS_ROOT,
+    DOMAIN,
+    validate_appdaemon_apps_root,
+)
 from custom_components.mcp_server_http_transport.tools import appdaemon_files as tools
 
 
@@ -19,6 +24,12 @@ def _hass() -> Mock:
         return fn(*args)
 
     hass.async_add_executor_job = AsyncMock(side_effect=executor)
+    return hass
+
+
+def _configured_hass(root: str) -> Mock:
+    hass = _hass()
+    hass.data[DOMAIN][CONF_APPDAEMON_APPS_ROOT] = root
     return hass
 
 
@@ -140,6 +151,39 @@ async def test_disabled_gate_performs_no_filesystem_access(apps_root: Path):
 async def test_rejects_unusual_relative_forms(apps_root: Path, path: str):
     text = (await tools.get_appdaemon_file(_hass(), {"path": path}))["content"][0]["text"]
     assert "Error reading AppDaemon file" in text
+
+
+@pytest.mark.parametrize(
+    "root",
+    [
+        DEFAULT_APPDAEMON_APPS_ROOT,
+        "/share/appdaemon/apps",
+        "/share/project/appdaemon/apps",
+        "/media/appdaemon/apps",
+    ],
+)
+def test_allows_legacy_and_shared_roots(root: str):
+    assert validate_appdaemon_apps_root(root) == root
+
+
+@pytest.mark.parametrize(
+    "root",
+    [
+        "/config/appdaemon/apps",
+        "/share/../config/apps",
+        "/share/appdaemon/./apps",
+        "/share//appdaemon/apps",
+        "share/appdaemon/apps",
+        "/tmp/apps",
+    ],
+)
+def test_rejects_unapproved_or_escaping_roots(root: str):
+    with pytest.raises(ValueError):
+        validate_appdaemon_apps_root(root)
+
+
+def test_configured_shared_root_is_used():
+    assert tools._root(_configured_hass("/share/appdaemon/apps")) == Path("/share/appdaemon/apps")
 
 
 @pytest.mark.asyncio

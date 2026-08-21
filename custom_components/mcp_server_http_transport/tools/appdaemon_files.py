@@ -12,7 +12,12 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from ..const import DOMAIN
+from ..const import (
+    CONF_APPDAEMON_APPS_ROOT,
+    DEFAULT_APPDAEMON_APPS_ROOT,
+    DOMAIN,
+    validate_appdaemon_apps_root,
+)
 from . import (
     ANNOTATION_DESTRUCTIVE,
     ANNOTATION_IDEMPOTENT,
@@ -21,7 +26,7 @@ from . import (
     register_tool,
 )
 
-_APPS_ROOT = Path("/addon_configs/a0d7b954_appdaemon/apps")
+_APPS_ROOT = Path(DEFAULT_APPDAEMON_APPS_ROOT)
 _BACKUP_DIR_NAME = ".mcp_appdaemon_backups"
 _BACKUP_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d+$")
 _MAX_FILE_BYTES = 1_048_576
@@ -47,9 +52,12 @@ def _enabled(hass: HomeAssistant) -> bool:
     return hass.data.get(DOMAIN, {}).get("appdaemon_file_access", False)
 
 
-def _root() -> Path:
-    """Fixed production boundary (monkeypatched only by tests)."""
-    return _APPS_ROOT
+def _root(hass: HomeAssistant) -> Path:
+    """Return the configured, bounded production root."""
+    configured = hass.data.get(DOMAIN, {}).get(CONF_APPDAEMON_APPS_ROOT)
+    if configured is None:
+        return _APPS_ROOT
+    return Path(validate_appdaemon_apps_root(configured))
 
 
 def _error(prefix: str, exc: Exception) -> dict[str, Any]:
@@ -90,7 +98,21 @@ class _RootFS:
     """
 
     def __init__(self, root: Path) -> None:
-        self.fd = os.open(root, _DIR_FLAGS)
+        self.fd = self._open_root(root)
+
+    @staticmethod
+    def _open_root(root: Path) -> int:
+        """Open every root component without following symlinks."""
+        fd = os.open("/", _DIR_FLAGS)
+        try:
+            for part in root.parts[1:]:
+                next_fd = os.open(part, _DIR_FLAGS, dir_fd=fd)
+                os.close(fd)
+                fd = next_fd
+            return fd
+        except Exception:
+            os.close(fd)
+            raise
 
     def close(self) -> None:
         os.close(self.fd)
@@ -355,7 +377,7 @@ async def list_appdaemon_files(hass: HomeAssistant, arguments: dict[str, Any]) -
     try:
 
         def work():
-            with _RootFS(_root()) as fs:
+            with _RootFS(_root(hass)) as fs:
                 return [
                     {"path": "/".join(rel), "size": len(data), "sha256": _sha(data)}
                     for rel, data, _mode in fs.files()
@@ -386,7 +408,7 @@ async def get_appdaemon_file(hass: HomeAssistant, arguments: dict[str, Any]) -> 
         parts = _parts(arguments["path"])
 
         def work():
-            with _RootFS(_root()) as fs:
+            with _RootFS(_root(hass)) as fs:
                 data, _mode = fs.read(parts, limit=_MAX_FILE_BYTES)
                 return {
                     "path": "/".join(parts),
@@ -422,7 +444,7 @@ async def save_appdaemon_file(hass: HomeAssistant, arguments: dict[str, Any]) ->
             raise ValueError("Content is too large (maximum 1 MB)")
 
         def work():
-            with _RootFS(_root()) as fs:
+            with _RootFS(_root(hass)) as fs:
                 try:
                     before, mode = fs.read(parts)
                 except FileNotFoundError:
@@ -459,7 +481,7 @@ async def delete_appdaemon_file(hass: HomeAssistant, arguments: dict[str, Any]) 
         parts = _parts(arguments["path"])
 
         def work():
-            with _RootFS(_root()) as fs:
+            with _RootFS(_root(hass)) as fs:
                 before, _mode = fs.read(parts)
                 stamp, _ = fs.snapshot()
                 fs.unlink(parts)
@@ -492,7 +514,7 @@ async def backup_appdaemon_files(hass: HomeAssistant, arguments: dict[str, Any])
     try:
 
         def work():
-            with _RootFS(_root()) as fs:
+            with _RootFS(_root(hass)) as fs:
                 stamp, files = fs.snapshot()
                 return {"success": True, "backup": _backup_path(stamp), "files": files}
 
@@ -517,7 +539,7 @@ async def list_appdaemon_backups(hass: HomeAssistant, arguments: dict[str, Any])
     try:
 
         def work():
-            with _RootFS(_root()) as fs:
+            with _RootFS(_root(hass)) as fs:
                 try:
                     base = fs.dir((_BACKUP_DIR_NAME,))
                 except FileNotFoundError:
@@ -572,7 +594,7 @@ async def restore_appdaemon_backup(
             raise ValueError("Invalid backup timestamp")
 
         def work():
-            with _RootFS(_root()) as fs:
+            with _RootFS(_root(hass)) as fs:
                 return _restore(fs, timestamp)
 
         return {

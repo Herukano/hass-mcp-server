@@ -8,12 +8,15 @@ from homeassistant import config_entries
 from homeassistant.core import callback
 
 from .const import (
+    CONF_APPDAEMON_APPS_ROOT,
     CONF_APPDAEMON_FILE_ACCESS,
     CONF_CAMERA_IMAGE_ACCESS,
     CONF_CONFIG_FILE_ACCESS,
     CONF_IMAGE_FILE_ACCESS,
     CONF_NATIVE_AUTH,
+    DEFAULT_APPDAEMON_APPS_ROOT,
     DOMAIN,
+    validate_appdaemon_apps_root,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -25,6 +28,9 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Optional(CONF_CAMERA_IMAGE_ACCESS, default=False): bool,
         vol.Optional(CONF_IMAGE_FILE_ACCESS, default=False): bool,
         vol.Optional(CONF_APPDAEMON_FILE_ACCESS, default=False): bool,
+        vol.Optional(CONF_APPDAEMON_APPS_ROOT, default=DEFAULT_APPDAEMON_APPS_ROOT): vol.All(
+            str, validate_appdaemon_apps_root
+        ),
     }
 )
 
@@ -41,10 +47,27 @@ class MCPServerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
+            user_input = {
+                **user_input,
+                CONF_APPDAEMON_APPS_ROOT: user_input.get(
+                    CONF_APPDAEMON_APPS_ROOT, DEFAULT_APPDAEMON_APPS_ROOT
+                ),
+            }
             native_auth = user_input.get(CONF_NATIVE_AUTH, False)
 
+            try:
+                validate_appdaemon_apps_root(
+                    user_input.get(CONF_APPDAEMON_APPS_ROOT, DEFAULT_APPDAEMON_APPS_ROOT)
+                )
+            except ValueError:
+                errors["base"] = "invalid_appdaemon_apps_root"
+
             # OIDC provider is only required when native auth is disabled
-            if not native_auth and "oidc_provider" not in self.hass.config_entries.async_domains():
+            if errors:
+                pass
+            elif (
+                not native_auth and "oidc_provider" not in self.hass.config_entries.async_domains()
+            ):
                 errors["base"] = "oidc_provider_required"
             else:
                 return self.async_create_entry(title="MCP Server", data=user_input)
@@ -95,6 +118,9 @@ class MCPServerOptionsFlowHandler(config_entries.OptionsFlow):
         current_appdaemon_file_access = self.config_entry.data.get(
             CONF_APPDAEMON_FILE_ACCESS, False
         )
+        current_appdaemon_apps_root = self.config_entry.data.get(
+            CONF_APPDAEMON_APPS_ROOT, DEFAULT_APPDAEMON_APPS_ROOT
+        )
 
         return self.async_show_form(
             step_id="init",
@@ -109,6 +135,9 @@ class MCPServerOptionsFlowHandler(config_entries.OptionsFlow):
                     vol.Optional(
                         CONF_APPDAEMON_FILE_ACCESS, default=current_appdaemon_file_access
                     ): bool,
+                    vol.Optional(
+                        CONF_APPDAEMON_APPS_ROOT, default=current_appdaemon_apps_root
+                    ): vol.All(str, validate_appdaemon_apps_root),
                 }
             ),
             errors=errors,
