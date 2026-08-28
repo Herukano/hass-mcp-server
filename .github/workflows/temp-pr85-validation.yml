@@ -1,0 +1,20 @@
+name: Temporary PR85 Validation
+
+on:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: 221ff36b4d0b1c043c482be77d0f13439e5faf8e
+
+      - name: HACS Validation
+        uses: hacs/action@main
+        with:
+          category: integration
+
+      - name: Hassfest Validation
+        uses: home-assistant/actions/hassfest@master
