@@ -1,0 +1,26 @@
+name: Temporary PR85 Validation
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: db9824b8f79158fe4bfdd369d6e6ab9cbd896b78
+
+      - name: Verify exact checkout SHA
+        run: test "$(git rev-parse HEAD)" = "db9824b8f79158fe4bfdd369d6e6ab9cbd896b78"
+
+      - name: HACS Validation
+        uses: hacs/action@main
+        with:
+          category: integration
+
+      - name: Hassfest Validation
+        uses: home-assistant/actions/hassfest@master
